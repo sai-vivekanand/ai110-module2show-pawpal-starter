@@ -4,13 +4,28 @@
 
 **a. Initial design**
 
-- Briefly describe your initial UML design.
-- What classes did you include, and what responsibilities did you assign to each?
+### Core User Actions
+
+1. **Add / manage a pet and owner profile** — The user enters their own name and how many minutes they have available each day, then registers a pet with a name, species, breed, and age. This data drives every scheduling decision.
+
+2. **Add and edit care tasks** — The user creates tasks such as walks, feeding, medication, grooming, or enrichment. Each task has a name, a type, an estimated duration (minutes), and a priority level (high / medium / low). Tasks can be edited or removed at any time.
+
+3. **Generate and view today's daily care plan** — The user asks the system to produce a schedule. The Scheduler fits as many tasks as possible into the owner's available time window, orders them by priority, and returns a readable plan that explains which tasks were included and why any were skipped.
+
+### Classes and Responsibilities
+
+| Class | Responsibility |
+|-------|----------------|
+| `Owner` | Stores the owner's name and daily time budget; acts as the entry point for the system |
+| `Pet` | Stores the pet's profile (name, species, breed, age); linked to an Owner |
+| `Task` | Dataclass holding a single care task (type, duration, priority); pure data, no logic |
+| `Scheduler` | Accepts an Owner, a Pet, and a list of Tasks; applies constraints and priority rules to produce a sorted, time-bounded daily plan |
 
 **b. Design changes**
 
-- Did your design change during implementation?
-- If yes, describe at least one change and why you made it.
+After reviewing the skeleton, one notable gap surfaced: there was no explicit `reason` field on skipped tasks. The first draft of `DailyPlan` only had a `skipped: list[Task]` list, so users couldn't tell *why* a task was omitted (time budget exceeded vs. user preference). This was addressed by adding a `ScheduledTask` wrapper dataclass that carries a `start_minute`, and by having `explain_plan()` in `Scheduler` generate per-task reasoning strings — keeping the explanation logic in one place rather than leaking it into the UI layer.
+
+A secondary observation: `Owner.total_task_minutes()` could be ambiguous if a pet is shared between owners in future. For this single-owner scenario the method is fine, but it was noted as a potential bottleneck if the data model ever expands.
 
 ---
 
