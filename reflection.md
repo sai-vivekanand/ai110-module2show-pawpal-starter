@@ -33,13 +33,19 @@ A secondary observation: `Owner.total_task_minutes()` could be ambiguous if a pe
 
 **a. Constraints and priorities**
 
-- What constraints does your scheduler consider (for example: time, priority, preferences)?
-- How did you decide which constraints mattered most?
+The scheduler considers two hard constraints: the owner's **daily time budget** (`available_minutes`) and task **priority level** (HIGH → MEDIUM → LOW). Within the same priority tier, **shorter tasks are scheduled first** — this is a shortest-job-first tiebreak that maximises the number of completed tasks when time is tight.
+
+Priority was chosen as the dominant constraint because a pet owner's primary concern is that high-stakes tasks (medication, feeding) always happen before enrichment or grooming. Time budget is the only other hard constraint; everything else (pet preference, notes) is metadata that influences *what* tasks exist, not *whether* they fit.
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+The scheduler uses **exact sequential block assignment** — each task is placed immediately after the previous one with no gaps, and the "does it fit?" check compares only `task.duration_minutes <= remaining_budget`. This means:
+
+- **It does not detect overlaps in the generated plan** (the greedy cursor guarantees sequential placement, so overlaps are structurally impossible from `generate_plan()`).
+- **Conflict detection is a separate utility** that operates on *any* list of `ScheduledTask` objects. This is useful when tasks are imported or manually placed at fixed times in the future.
+- **It cannot partially schedule a task** — if "Morning walk (30 min)" doesn't fit in the 15 remaining minutes, it is skipped entirely rather than shortened.
+
+This tradeoff is reasonable because pet care tasks are largely atomic (you can't do half a walk) and because the greedy approach is easy to reason about and test. A more complex constraint-satisfaction approach would add code complexity for marginal benefit in a single-owner app.
 
 ---
 
