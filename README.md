@@ -129,3 +129,8 @@ reflection.md      # Design and AI-collaboration reflection
 5. Add tests to verify key behaviors.
 6. Connect your logic to the Streamlit UI in `app.py`.
 7. Refine UML so it matches what you actually built.
+
+## DEMO
+
+<img width="897" height="759" alt="image" src="https://github.com/user-attachments/assets/3aef1433-5ef1-4a54-94a0-c6663104e5d5" />
+<img width="867" height="714" alt="image" src="https://github.com/user-attachments/assets/26a68e34-d66e-45b1-a88e-789192709db7" />
