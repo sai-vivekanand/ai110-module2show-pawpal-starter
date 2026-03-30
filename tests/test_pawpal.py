@@ -409,3 +409,191 @@ class TestScheduler:
         owner.add_pet(pet)
         plan = Scheduler(owner).generate_plan()
         assert plan.conflicts == []
+
+
+# ---------------------------------------------------------------------------
+# Edge-case tests
+# ---------------------------------------------------------------------------
+
+class TestEdgeCases:
+    """Happy-path limits and boundary conditions for every major feature."""
+
+    # -- Pet with zero tasks --
+
+    def test_pet_with_no_tasks_has_empty_pending(self):
+        """A freshly created Pet has no pending tasks."""
+        pet = make_pet()
+        assert pet.get_pending_tasks() == []
+
+    def test_pet_with_no_tasks_sorts_to_empty_list(self):
+        """Sorting an empty task list should return an empty list, not raise."""
+        pet = make_pet()
+        assert pet.tasks_sorted_by_duration() == []
+        assert pet.tasks_sorted_by_priority() == []
+
+    def test_owner_with_no_pets_returns_zero_minutes(self):
+        """An owner who has registered no pets should have 0 total task minutes."""
+        owner = make_owner()
+        assert owner.total_task_minutes() == 0
+
+    def test_owner_with_no_pets_has_empty_pending_list(self):
+        """get_all_pending_tasks() returns an empty list when no pets exist."""
+        owner = make_owner()
+        assert owner.get_all_pending_tasks() == []
+
+    # -- Exact-fit budget --
+
+    def test_task_exactly_filling_budget_is_scheduled(self):
+        """A task whose duration exactly equals available_minutes must be scheduled."""
+        owner = make_owner(available_minutes=30)
+        pet = make_pet()
+        pet.add_task(make_task(name="Exact fit", duration=30))
+        owner.add_pet(pet)
+        plan = Scheduler(owner).generate_plan()
+        assert len(plan.scheduled) == 1
+        assert plan.total_minutes_used == 30
+        assert plan.skipped == []
+
+    def test_task_one_minute_over_budget_is_skipped(self):
+        """A task that exceeds the budget by exactly 1 minute must be skipped."""
+        owner = make_owner(available_minutes=29)
+        pet = make_pet()
+        pet.add_task(make_task(name="One over", duration=30))
+        owner.add_pet(pet)
+        plan = Scheduler(owner).generate_plan()
+        assert plan.scheduled == []
+        assert len(plan.skipped) == 1
+
+    # -- Sorting correctness --
+
+    def test_sort_by_duration_preserves_all_tasks(self):
+        """Sorting should not drop or duplicate any tasks."""
+        pet = make_pet()
+        for i in range(5):
+            pet.add_task(make_task(name=f"T{i}", duration=i * 5 + 1))
+        original_names = {t.name for t in pet.tasks}
+        sorted_names = {t.name for t in pet.tasks_sorted_by_duration()}
+        assert original_names == sorted_names
+
+    def test_sort_by_duration_is_non_destructive(self):
+        """tasks_sorted_by_duration() must not reorder pet.tasks in place."""
+        pet = make_pet()
+        pet.add_task(make_task(name="Long", duration=30))
+        pet.add_task(make_task(name="Short", duration=5))
+        original_order = [t.name for t in pet.tasks]
+        pet.tasks_sorted_by_duration()   # call the sort
+        assert [t.name for t in pet.tasks] == original_order   # unchanged
+
+    def test_scheduled_tasks_start_minutes_are_ascending(self):
+        """In a freshly generated plan, start_minute must strictly increase."""
+        owner = make_owner(available_minutes=90)
+        pet = make_pet()
+        for i in range(4):
+            pet.add_task(make_task(name=f"T{i}", duration=10))
+        owner.add_pet(pet)
+        plan = Scheduler(owner).generate_plan()
+        starts = [st.start_minute for st in plan.scheduled]
+        assert starts == sorted(starts)
+
+    def test_end_minute_equals_start_plus_duration(self):
+        """ScheduledTask.end_minute must always equal start_minute + duration."""
+        pet = make_pet()
+        task = make_task(duration=25)
+        st = ScheduledTask(pet=pet, task=task, start_minute=10)
+        assert st.end_minute == 35
+
+    # -- Recurrence edge cases --
+
+    def test_daily_task_without_due_date_uses_today(self):
+        """A daily task with no due_date set should renew relative to today."""
+        today = date.today()
+        task = Task(
+            name="Walk",
+            task_type=TaskType.WALK,
+            duration_minutes=20,
+            priority=Priority.HIGH,
+            frequency=Frequency.DAILY,
+            due_date=None,   # no explicit date
+        )
+        next_task = task.mark_complete()
+        assert next_task is not None
+        assert next_task.due_date == today + timedelta(days=1)
+
+    def test_completing_recurring_task_does_not_affect_other_tasks(self):
+        """Renewing one task should not change any other task on the pet."""
+        pet = make_pet()
+        pet.add_task(make_task(name="Daily walk", frequency=Frequency.DAILY))
+        pet.add_task(make_task(name="One-time vet", frequency=Frequency.ONCE))
+        pet.complete_task("Daily walk")
+        vet_task = next(t for t in pet.tasks if t.name == "One-time vet")
+        assert vet_task.completed is False   # untouched
+
+    def test_renewed_task_inherits_same_type_and_priority(self):
+        """The renewal produced by mark_complete() must carry forward all core fields."""
+        task = Task(
+            name="Medication",
+            task_type=TaskType.MEDICATION,
+            duration_minutes=5,
+            priority=Priority.HIGH,
+            frequency=Frequency.DAILY,
+            due_date=date.today(),
+        )
+        renewal = task.mark_complete()
+        assert renewal is not None
+        assert renewal.task_type == TaskType.MEDICATION
+        assert renewal.priority == Priority.HIGH
+        assert renewal.duration_minutes == 5
+        assert renewal.frequency == Frequency.DAILY
+
+    # -- Conflict detection edge cases --
+
+    def test_tasks_sharing_exact_start_conflict(self):
+        """Two tasks starting at the same minute must be flagged as a conflict."""
+        pet = make_pet()
+        a = ScheduledTask(pet=pet, task=make_task(name="A", duration=10), start_minute=0)
+        b = ScheduledTask(pet=pet, task=make_task(name="B", duration=5), start_minute=0)
+        conflicts = Scheduler.detect_conflicts([a, b])
+        assert len(conflicts) == 1
+
+    def test_task_ending_exactly_when_next_starts_is_not_a_conflict(self):
+        """Back-to-back tasks (end == next start) must NOT be a conflict."""
+        pet = make_pet()
+        a = ScheduledTask(pet=pet, task=make_task(duration=10), start_minute=0)
+        b = ScheduledTask(pet=pet, task=make_task(duration=10), start_minute=10)
+        assert Scheduler.detect_conflicts([a, b]) == []
+
+    def test_single_task_has_no_conflicts(self):
+        """A list with only one task cannot conflict with anything."""
+        pet = make_pet()
+        a = ScheduledTask(pet=pet, task=make_task(duration=20), start_minute=0)
+        assert Scheduler.detect_conflicts([a]) == []
+
+    def test_empty_scheduled_list_has_no_conflicts(self):
+        """detect_conflicts([]) must return an empty list without raising."""
+        assert Scheduler.detect_conflicts([]) == []
+
+    def test_multiple_conflicts_all_reported(self):
+        """When three tasks all overlap, all pairwise conflicts must be returned."""
+        pet = make_pet()
+        a = ScheduledTask(pet=pet, task=make_task(name="A", duration=30), start_minute=0)
+        b = ScheduledTask(pet=pet, task=make_task(name="B", duration=30), start_minute=5)
+        c = ScheduledTask(pet=pet, task=make_task(name="C", duration=30), start_minute=10)
+        conflicts = Scheduler.detect_conflicts([a, b, c])
+        assert len(conflicts) == 3   # A-B, A-C, B-C
+
+    # -- Filter edge cases --
+
+    def test_filter_by_nonexistent_pet_returns_empty(self):
+        """filter_by_pet() for a name that doesn't exist should return []."""
+        pet = make_pet("Buddy")
+        st = ScheduledTask(pet=pet, task=make_task(), start_minute=0)
+        assert Scheduler.filter_by_pet([st], "Ghost") == []
+
+    def test_filter_tasks_by_pet_case_insensitive(self):
+        """filter_tasks_by_pet() should match regardless of name capitalisation."""
+        owner = make_owner()
+        pet = make_pet("Buddy")
+        pet.add_task(make_task())
+        owner.add_pet(pet)
+        assert len(owner.filter_tasks_by_pet("buddy")) == 1
+        assert len(owner.filter_tasks_by_pet("BUDDY")) == 1
